@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use clap::Parser;
 use image::io::Reader as ImageReader;
 use image::GenericImageView;
@@ -16,12 +17,12 @@ const HEAT_MAP: [char; 16] = [
     ' ', '.', '´', ':', 'i', '!', 'I', '~', '+', 'x', '$', 'X', '#', '▄', '■', '█',
 ];
 
-fn main() {
+fn main() -> Result<()> {
     let args = Args::parse();
     let img = ImageReader::open(args.file_path)
-        .expect("File_path should be a valid path to a file!")
+        .context("file_path should be a valid path to a file!")?
         .decode()
-        .expect("File path should point to an image file!");
+        .context("file_path should point to an image file!")?;
 
     let (width, height) = img.dimensions();
     let avg_pixels: Vec<u8> = img
@@ -38,4 +39,5 @@ fn main() {
         }
         println!("");
     }
+    Ok(())
 }
