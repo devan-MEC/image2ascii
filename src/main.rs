@@ -2,21 +2,21 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use crossterm::{
     cursor, queue,
-    style::{self, Color, Print, PrintStyledContent, Stylize},
+    style::{Color, Print, PrintStyledContent, Stylize},
     terminal::{self, Clear, ClearType},
-    ExecutableCommand, QueueableCommand,
+    ExecutableCommand,
 };
-use image::AnimationDecoder;
-use image::GenericImageView;
-use image::Pixel;
-use image::{codecs::gif::GifDecoder, Frame};
-use image::{imageops::FilterType, DynamicImage};
-use image::{io::Reader as ImageReader, ImageFormat};
-use std::io::{stdout, Write};
-use std::thread::sleep;
-use std::time::Duration;
+use image::{
+    codecs::gif::GifDecoder, imageops::FilterType, io::Reader as ImageReader, AnimationDecoder,
+    DynamicImage, Frame, GenericImageView, ImageFormat, Pixel,
+};
+use std::{
+    io::{stdout, Write},
+    thread::sleep,
+    time::Duration,
+};
 
-/// Simple program generate ASCII art from an input image
+/// Simple program that generates ASCII art from an input image
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -31,6 +31,10 @@ struct Args {
     /// Resize the image so that it fits the current terminal's dimensions, preserving aspect ratio.
     #[arg(short, long, default_value_t = false)]
     resize: bool,
+
+    /// Time to wait between frames when rendering a GIF
+    #[arg(short, long, default_value_t = 200)]
+    animation_delay: u64,
 }
 
 const HEAT_MAP: [char; 16] = [
@@ -116,7 +120,7 @@ fn print_gif(path: &str, args: &Args) -> Result<()> {
             drop(stdout);
             let img = DynamicImage::ImageRgba8(frame);
             print_img(img, &args)?;
-            sleep(Duration::from_millis(300));
+            sleep(Duration::from_millis(args.animation_delay));
             Ok::<_, anyhow::Error>(())
         })
         .collect()
