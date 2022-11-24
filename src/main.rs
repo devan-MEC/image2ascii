@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use colored::Colorize;
+use image::imageops::FilterType;
 use image::io::Reader as ImageReader;
 use image::GenericImageView;
 use image::Pixel;
@@ -13,9 +14,13 @@ struct Args {
     #[arg(short, long)]
     file_path: String,
 
-    /// Should the ascii output be colored?
+    /// Colorize the ascii output
     #[arg(short, long, default_value_t = false)]
     colored: bool,
+
+    /// Resize the image so that it fits the current terminal's dimensions, preserving aspect ratio.
+    #[arg(short, long, default_value_t = false)]
+    resize: bool,
 }
 
 const HEAT_MAP: [char; 16] = [
@@ -25,9 +30,14 @@ const HEAT_MAP: [char; 16] = [
 fn main() -> Result<()> {
     let args = Args::parse();
     let img = ImageReader::open(args.file_path)
-        .context("file_path should be a valid path to a file!")?
+        .context("file_path should be a valid path to a file")?
         .decode()
-        .context("file_path should point to an image file!")?;
+        .context("file_path should point to an image file with the correct extension")?;
+    let img = if args.resize {
+        img.resize(100, 100, FilterType::Nearest)
+    } else {
+        img
+    };
     let (width, height) = img.dimensions();
     let pixels_with_value: Vec<(u8, u8, u8, u8)> = img
         .pixels()
