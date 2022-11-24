@@ -1,16 +1,27 @@
+use clap::Parser;
 use image::io::Reader as ImageReader;
+use image::GenericImageView;
 use image::Pixel;
-use image::{GenericImage, GenericImageView, ImageBuffer, RgbImage};
-use std::env;
 
-const HEAT_MAP: [char;16]= [' ','.','´',':','i','!','I','~','+','x','$','X','#', '▄','■','█'];
+/// Simple program to greet a person
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Path of the image file to be asii art'd
+    #[arg(short, long)]
+    file_path: String,
+}
+
+const HEAT_MAP: [char; 16] = [
+    ' ', '.', '´', ':', 'i', '!', 'I', '~', '+', 'x', '$', 'X', '#', '▄', '■', '█',
+];
 
 fn main() {
-    let filename = env::args().nth(1).expect("Enter filename");
-    let img = ImageReader::open(filename)
-        .expect("filename invalid")
+    let args = Args::parse();
+    let img = ImageReader::open(args.file_path)
+        .expect("File_path should be a valid path to a file!")
         .decode()
-        .unwrap();
+        .expect("File path should point to an image file!");
 
     let (width, height) = img.dimensions();
     let avg_pixels: Vec<u8> = img
@@ -22,7 +33,7 @@ fn main() {
         .map(|p| p / 16)
         .collect();
     for i in 0..height {
-        for j in i*width..i*width+width {
+        for j in i * width..i * width + width {
             print!("{}", HEAT_MAP[avg_pixels[j as usize] as usize]);
         }
         println!("");
