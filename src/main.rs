@@ -1,16 +1,21 @@
 use anyhow::{Context, Result};
 use clap::Parser;
+use colored::Colorize;
 use image::io::Reader as ImageReader;
 use image::GenericImageView;
 use image::Pixel;
 
-/// Simple program to greet a person
+/// Simple program generate ASCII art from an input image
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Path of the image file to be asii art'd
     #[arg(short, long)]
     file_path: String,
+
+    /// Should the ascii output be colored?
+    #[arg(short, long, default_value_t = false)]
+    colored: bool,
 }
 
 const HEAT_MAP: [char; 16] = [
@@ -23,19 +28,34 @@ fn main() -> Result<()> {
         .context("file_path should be a valid path to a file!")?
         .decode()
         .context("file_path should point to an image file!")?;
-
     let (width, height) = img.dimensions();
-    let avg_pixels: Vec<u8> = img
+    let pixels_with_value: Vec<(u8, u8, u8, u8)> = img
         .pixels()
         .map(|p| {
             let p = p.2.channels();
-            ((p[0] as u32 + p[1] as u32 + p[2] as u32) / 3) as u8
+            (
+                p[0],
+                p[1],
+                p[2],
+                ((p[0] as u32 + p[1] as u32 + p[2] as u32) / 3) as u8,
+            )
         })
-        .map(|p| p / 16)
+        .map(|(r, g, b, p)| (r, g, b, p / 16))
         .collect();
     for i in 0..height {
         for j in i * width..i * width + width {
-            print!("{}", HEAT_MAP[avg_pixels[j as usize] as usize]);
+            print!(
+                "{}",
+                if args.colored {
+                    let p = pixels_with_value[j as usize];
+                    HEAT_MAP[p.3 as usize]
+                        .to_string()
+                        .truecolor(p.0, p.1, p.2)
+                        .to_string()
+                } else {
+                    HEAT_MAP[pixels_with_value[j as usize].3 as usize].to_string()
+                }
+            );
         }
         println!("");
     }
