@@ -35,10 +35,14 @@ struct Args {
     /// Time to wait between frames when rendering a GIF
     #[arg(short, long, default_value_t = 200)]
     animation_delay: u64,
+
+    /// Loop animation
+    #[arg(short, long, default_value_t = false)]
+    loop_animation: bool,
 }
 
-const HEAT_MAP: [char; 16] = [
-    ' ', '.', '´', ':', 'i', '!', 'I', '~', '+', 'x', '$', 'X', '#', '▄', '■', '█',
+const HEAT_MAP: [&str; 16] = [
+    "  ", "..", "´´", "::", "ii", "!!", "II", "~~", "++", "xx", "$$", "XX", "##", "▄▄", "■■", "██",
 ];
 
 fn resize_img(img: DynamicImage) -> Result<DynamicImage> {
@@ -109,21 +113,26 @@ fn print_img(img: DynamicImage, args: &Args) -> Result<()> {
 fn print_gif(path: &str, args: &Args) -> Result<()> {
     //TODO fix scrolling issue when animating a GIF
     let file = std::fs::File::open(path)?;
-    GifDecoder::new(file)?
+    let frames: Vec<_> = GifDecoder::new(file)?
         .into_frames()
         .collect_frames()?
         .into_iter()
         .map(Frame::into_buffer)
-        .map(|frame| {
+        .collect();
+
+    loop {
+        frames.iter().for_each(|frame| {
             let mut stdout = stdout();
-            stdout.execute(cursor::MoveTo(0, 0))?;
+            stdout.execute(cursor::MoveTo(0, 0)).unwrap();
             drop(stdout);
-            let img = DynamicImage::ImageRgba8(frame);
-            print_img(img, &args)?;
+            let img = DynamicImage::ImageRgba8(frame.clone());
+            print_img(img, &args).unwrap();
             sleep(Duration::from_millis(args.animation_delay));
-            Ok::<_, anyhow::Error>(())
-        })
-        .collect()
+        });
+        if !args.loop_animation {
+            break Ok(());
+        }
+    }
 }
 
 fn main() -> Result<()> {
