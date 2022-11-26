@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use crossterm::{
-    cursor, queue,
+    cursor, execute, queue,
     style::{Color, Print, PrintStyledContent, Stylize},
     terminal::{self, Clear, ClearType},
     ExecutableCommand,
@@ -15,6 +15,34 @@ use std::{
     thread::sleep,
     time::Duration,
 };
+
+struct EventManager<'a> {
+    events: Vec<(Box<dyn FnMut() -> bool + 'a>, Box<dyn Fn()>)>,
+}
+
+impl<'a> EventManager<'a> {
+    pub fn append<F2>(mut self, test: impl FnMut() -> bool + 'a, callback: F2) -> Self
+    where
+        F2: Fn() + 'static,
+    {
+        self.events.push((Box::new(test), Box::new(callback)));
+        self
+    }
+
+    pub fn run(&mut self) {
+        for e in &mut self.events {
+            if e.0() {
+                e.1();
+            }
+        }
+    }
+}
+
+impl<'a> Default for EventManager<'a> {
+    fn default() -> Self {
+        EventManager { events: Vec::new() }
+    }
+}
 
 /// Simple program that generates ASCII art from an input image
 #[derive(Parser, Debug)]
@@ -32,26 +60,54 @@ struct Args {
     #[arg(short, long, default_value_t = false)]
     resize: bool,
 
-    /// Time to wait between frames when rendering a GIF
+    /// Time to wait between frames (GIF mode)
     #[arg(short, long, default_value_t = 200)]
     animation_delay: u64,
 
-    /// Loop animation
+    /// Loop animation (GIF mode)
     #[arg(short, long, default_value_t = false)]
     loop_animation: bool,
+
+    /// Truecolor (display the actual color of pixels using only ASCII's block character)
+    #[arg(short, long, default_value_t = false)]
+    true_color: bool,
 }
 
 const HEAT_MAP: [&str; 16] = [
-    "  ", "..", "´´", "::", "ii", "!!", "II", "~~", "++", "xx", "$$", "XX", "##", "▄▄", "■■", "██",
+    "  ",
+    "...",
+    "´´´",
+    ":::",
+    "iii",
+    "!!!",
+    "III",
+    "~~~",
+    "+++",
+    "xxx",
+    "$$$",
+    "XXX",
+    "###",
+    "▄▄▄",
+    "■■■",
+    "███",
 ];
 
 fn resize_img(img: DynamicImage) -> Result<DynamicImage> {
     //TODO correct image resizing algortihm
     let canvas_dimensions = terminal::size()?;
-    let canvas_dimensions = (canvas_dimensions.0 as u32, canvas_dimensions.1 as u32);
+    let canvas_dimensions = (
+        canvas_dimensions.0 as u32 / 3,
+        canvas_dimensions.1 as u32 - 3,
+    );
     let img_dimensions = img.dimensions();
-    let wr = img_dimensions.0 / canvas_dimensions.0;
-    let hr = img_dimensions.1 / canvas_dimensions.1;
+    let wr = img_dimensions
+        .1
+        .checked_div(canvas_dimensions.0)
+        .context("I don't like zero sized terminals")?;
+    let hr = img_dimensions
+        .1
+        .checked_div(canvas_dimensions.1)
+        .context("I don't like zero sized terminals")?;
     Ok(if hr > wr {
         img.resize(
             canvas_dimensions.1 * img_dimensions.0 / img_dimensions.1,
@@ -71,7 +127,7 @@ fn print_img(img: DynamicImage, args: &Args) -> Result<()> {
     let mut stdout = stdout();
     let img = if args.resize { resize_img(img)? } else { img };
     let (width, height) = img.dimensions();
-    queue!(stdout, Clear(ClearType::FromCursorUp))?;
+    stdout.execute(cursor::MoveTo(1, 1)).unwrap();
     let pixels_with_value: Vec<(u8, u8, u8, u8)> = img
         .pixels()
         .map(|p| {
@@ -83,25 +139,27 @@ fn print_img(img: DynamicImage, args: &Args) -> Result<()> {
                 ((p[0] as u32 + p[1] as u32 + p[2] as u32) / 3) as u8,
             )
         })
-        .map(|(r, g, b, p)| (r, g, b, p / 16))
+        .map(|(r, g, b, p)| (r, g, b, p))
         .collect();
     for i in 0..height {
         for j in i * width..i * width + width {
+            let p = pixels_with_value[j as usize];
+            let text = if args.true_color {
+                "███"
+            } else {
+                HEAT_MAP[p.3 as usize]
+            };
             if args.colored {
-                let p = pixels_with_value[j as usize];
                 queue!(
                     stdout,
-                    PrintStyledContent(HEAT_MAP[p.3 as usize].to_string().with(Color::Rgb {
+                    PrintStyledContent(text.with(Color::Rgb {
                         r: p.0,
                         g: p.1,
                         b: p.2
                     }))
                 )?
             } else {
-                queue!(
-                    stdout,
-                    Print(HEAT_MAP[pixels_with_value[j as usize].3 as usize].to_string())
-                )?
+                queue!(stdout, Print(text))?
             }
         }
         queue!(stdout, Print("\n"))?;
@@ -111,7 +169,6 @@ fn print_img(img: DynamicImage, args: &Args) -> Result<()> {
 }
 
 fn print_gif(path: &str, args: &Args) -> Result<()> {
-    //TODO fix scrolling issue when animating a GIF
     let file = std::fs::File::open(path)?;
     let frames: Vec<_> = GifDecoder::new(file)?
         .into_frames()
@@ -119,14 +176,27 @@ fn print_gif(path: &str, args: &Args) -> Result<()> {
         .into_iter()
         .map(Frame::into_buffer)
         .collect();
+    let mut canvas_size = terminal::size()?;
+    let mut events = EventManager::default().append(
+        || {
+            let size = terminal::size().unwrap();
+            if canvas_size != size {
+                canvas_size = size;
+                true
+            } else {
+                false
+            }
+        },
+        || {
+            execute!(stdout(), Clear(ClearType::All)).unwrap();
+        },
+    );
 
     loop {
         frames.iter().for_each(|frame| {
-            let mut stdout = stdout();
-            stdout.execute(cursor::MoveTo(0, 0)).unwrap();
-            drop(stdout);
             let img = DynamicImage::ImageRgba8(frame.clone());
             print_img(img, &args).unwrap();
+            events.run();
             sleep(Duration::from_millis(args.animation_delay));
         });
         if !args.loop_animation {
@@ -138,6 +208,7 @@ fn print_gif(path: &str, args: &Args) -> Result<()> {
 fn main() -> Result<()> {
     let args = Args::parse();
     let path = args.file_path.clone();
+    execute!(stdout(), Clear(ClearType::All)).unwrap();
     if image::ImageFormat::from_path(&path).context("file_path should be a valid path to a file")?
         == ImageFormat::Gif
     {
