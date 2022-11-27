@@ -6,6 +6,8 @@ use crossterm::{
     terminal::{self, Clear, ClearType},
     ExecutableCommand,
 };
+use file_format::FileFormat;
+use image::buffer::ConvertBuffer;
 use image::{
     codecs::gif::GifDecoder, imageops::FilterType, io::Reader as ImageReader, AnimationDecoder,
     DynamicImage, Frame, GenericImageView, ImageFormat, Pixel,
@@ -21,8 +23,9 @@ struct EventManager<'a> {
 }
 
 impl<'a> EventManager<'a> {
-    pub fn append<F2>(mut self, test: impl FnMut() -> bool + 'a, callback: F2) -> Self
+    pub fn append<F1, F2>(mut self, test: F1, callback: F2) -> Self
     where
+        F1: FnMut() -> bool + 'a,
         F2: Fn() + 'static,
     {
         self.events.push((Box::new(test), Box::new(callback)));
@@ -64,36 +67,40 @@ struct Args {
     #[arg(short, long, default_value_t = 200)]
     animation_delay: u64,
 
-    /// Loop animation (GIF mode)
+    /// Loop animation (stream mode). Will enable video for the webcam_feed option.
     #[arg(short, long, default_value_t = false)]
     loop_animation: bool,
 
-    /// Truecolor (display the actual color of pixels using only ASCII's block character)
+    /// Block character (display the actual color of pixels using only ASCII's block character)
     #[arg(short, long, default_value_t = false)]
-    true_color: bool,
+    block_character: bool,
+
+    /// Display ASCII'd frame from your webcam feed
+    #[arg(short, long, default_value_t = false)]
+    webcam_feed: bool,
 }
 
-const HEAT_MAP: [&str; 16] = [
-    "  ",
+const HEAT_MAP_LENGTH: usize = 16;
+const HEAT_MAP: [&str; HEAT_MAP_LENGTH] = [
+    "   ",
     "...",
     "´´´",
     ":::",
-    "iii",
-    "!!!",
-    "III",
     "~~~",
     "+++",
+    "iii",
     "xxx",
+    "!!!",
+    "III",
+    "###",
     "$$$",
     "XXX",
-    "###",
     "▄▄▄",
     "■■■",
     "███",
 ];
 
 fn resize_img(img: DynamicImage) -> Result<DynamicImage> {
-    //TODO correct image resizing algortihm
     let canvas_dimensions = terminal::size()?;
     let canvas_dimensions = (
         canvas_dimensions.0 as u32 / 3,
@@ -123,11 +130,13 @@ fn resize_img(img: DynamicImage) -> Result<DynamicImage> {
     })
 }
 
-fn print_img(img: DynamicImage, args: &Args) -> Result<()> {
+fn print_img(img: image::ImageBuffer<image::Rgb<u8>, Vec<u8>>, args: &Args) -> Result<()> {
+    //TODO fix banding in some resolutions of the terminal
     let mut stdout = stdout();
+    let img = DynamicImage::ImageRgb8(img);
     let img = if args.resize { resize_img(img)? } else { img };
     let (width, height) = img.dimensions();
-    stdout.execute(cursor::MoveTo(1, 1)).unwrap();
+    stdout.execute(cursor::MoveTo(0, 0)).unwrap();
     let pixels_with_value: Vec<(u8, u8, u8, u8)> = img
         .pixels()
         .map(|p| {
@@ -136,7 +145,8 @@ fn print_img(img: DynamicImage, args: &Args) -> Result<()> {
                 p[0],
                 p[1],
                 p[2],
-                ((p[0] as u32 + p[1] as u32 + p[2] as u32) / 3) as u8,
+                (((p[0] as u32 + p[1] as u32 + p[2] as u32) / 3) / (256 / HEAT_MAP_LENGTH) as u32)
+                    as u8,
             )
         })
         .map(|(r, g, b, p)| (r, g, b, p))
@@ -144,7 +154,7 @@ fn print_img(img: DynamicImage, args: &Args) -> Result<()> {
     for i in 0..height {
         for j in i * width..i * width + width {
             let p = pixels_with_value[j as usize];
-            let text = if args.true_color {
+            let text = if args.block_character {
                 "███"
             } else {
                 HEAT_MAP[p.3 as usize]
@@ -168,14 +178,10 @@ fn print_img(img: DynamicImage, args: &Args) -> Result<()> {
     Ok(())
 }
 
-fn print_gif(path: &str, args: &Args) -> Result<()> {
-    let file = std::fs::File::open(path)?;
-    let frames: Vec<_> = GifDecoder::new(file)?
-        .into_frames()
-        .collect_frames()?
-        .into_iter()
-        .map(Frame::into_buffer)
-        .collect();
+fn print_stream<I>(stream: I, args: &Args) -> Result<()>
+where
+    I: IntoIterator<Item = image::ImageBuffer<image::Rgb<u8>, Vec<u8>>>,
+{
     let mut canvas_size = terminal::size()?;
     let mut events = EventManager::default().append(
         || {
@@ -192,16 +198,38 @@ fn print_gif(path: &str, args: &Args) -> Result<()> {
         },
     );
 
-    loop {
-        frames.iter().for_each(|frame| {
-            let img = DynamicImage::ImageRgba8(frame.clone());
-            print_img(img, &args).unwrap();
-            events.run();
-            sleep(Duration::from_millis(args.animation_delay));
-        });
-        if !args.loop_animation {
-            break Ok(());
-        }
+    stream.into_iter().for_each(|frame| {
+        print_img(frame, &args).unwrap();
+        events.run();
+        sleep(Duration::from_millis(args.animation_delay));
+    });
+    Ok(())
+}
+
+fn print_gif(path: &str, args: &Args) -> Result<()> {
+    let file = std::fs::File::open(path)?;
+    let frames = GifDecoder::new(file)?
+        .into_frames()
+        .collect_frames()?
+        .into_iter()
+        .map(Frame::into_buffer)
+        .map(|f| f.convert());
+    if args.loop_animation {
+        print_stream(frames.cycle(), args)
+    } else {
+        print_stream(frames, args)
+    }
+}
+
+fn print_camera(args: &Args) -> Result<()> {
+    let mut camera = CameraIter::default();
+    if args.loop_animation {
+        print_stream(camera, args)
+    } else {
+        print_img(
+            camera.next().expect("Failed to get frame from camera"),
+            args,
+        )
     }
 }
 
@@ -209,15 +237,57 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let path = args.file_path.clone();
     execute!(stdout(), Clear(ClearType::All)).unwrap();
-    if image::ImageFormat::from_path(&path).context("file_path should be a valid path to a file")?
-        == ImageFormat::Gif
+    if args.webcam_feed {
+        print_camera(&args)
+    } else if matches!(image::ImageFormat::from_path(&path), Ok(ImageFormat::Gif)) {
+        print_gif(&path, &args)
+    } else if [FileFormat::Mpeg4Part14Video, FileFormat::MatroskaVideo]
+        .contains(&FileFormat::from_file(&path).unwrap_or(FileFormat::ArbitraryBinaryData))
     {
-        print_gif(&path, &args)?;
+        let frames =
+            ffmpeg_cmdline_utils::FfmpegFrameReaderBuilder::new(std::path::PathBuf::from(path))
+                .spawn()?
+                .0;
+        print_stream(frames, &args)
+    } else if let Ok(Ok(img)) = ImageReader::open(&path).map(|f| f.decode()) {
+        print_img(img.to_rgb8(), &args)
     } else {
-        let img = ImageReader::open(path)?
-            .decode()
-            .context("file_path should point to an image file with the correct extension")?;
-        print_img(img, &args)?;
+        let bytes =
+            reqwest::blocking::get(reqwest::Url::parse(&path).context(
+                "Given file path matches no criteria (Not GIF/Supported image/Video/URL)",
+            )?)?
+            .bytes()?;
+        Ok(())
     }
-    Ok(())
+}
+
+struct CameraIter {
+    camera: nokhwa::Camera,
+}
+
+impl Default for CameraIter {
+    fn default() -> Self {
+        let index = nokhwa::utils::CameraIndex::Index(0);
+        let requested = nokhwa::utils::RequestedFormat::new::<nokhwa::pixel_format::RgbFormat>(
+            nokhwa::utils::RequestedFormatType::AbsoluteHighestFrameRate,
+        );
+        let mut camera = nokhwa::Camera::new(index, requested).unwrap();
+        camera
+            .open_stream()
+            .context("Couldn't start camera stream")
+            .unwrap();
+        Self { camera }
+    }
+}
+
+impl Iterator for CameraIter {
+    type Item = image::ImageBuffer<image::Rgb<u8>, Vec<u8>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.camera
+            .frame()
+            .expect("Failed to get next frame from the camera")
+            .decode_image::<nokhwa::pixel_format::RgbFormat>()
+            .ok()
+    }
 }
