@@ -130,9 +130,10 @@ fn resize_img(img: DynamicImage) -> Result<DynamicImage> {
     })
 }
 
-fn print_img(img: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>, args: &Args) -> Result<()> {
+fn print_img(img: image::ImageBuffer<image::Rgb<u8>, Vec<u8>>, args: &Args) -> Result<()> {
+    //TODO fix banding in some resolutions of the terminal
     let mut stdout = stdout();
-    let img = DynamicImage::ImageRgba8(img);
+    let img = DynamicImage::ImageRgb8(img);
     let img = if args.resize { resize_img(img)? } else { img };
     let (width, height) = img.dimensions();
     stdout.execute(cursor::MoveTo(0, 0)).unwrap();
@@ -179,7 +180,7 @@ fn print_img(img: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>, args: &Args) -> 
 
 fn print_stream<I>(stream: I, args: &Args) -> Result<()>
 where
-    I: IntoIterator<Item = image::ImageBuffer<image::Rgba<u8>, Vec<u8>>>,
+    I: IntoIterator<Item = image::ImageBuffer<image::Rgb<u8>, Vec<u8>>>,
 {
     let mut canvas_size = terminal::size()?;
     let mut events = EventManager::default().append(
@@ -211,7 +212,8 @@ fn print_gif(path: &str, args: &Args) -> Result<()> {
         .into_frames()
         .collect_frames()?
         .into_iter()
-        .map(Frame::into_buffer);
+        .map(Frame::into_buffer)
+        .map(|f| f.convert());
     if args.loop_animation {
         print_stream(frames.cycle(), args)
     } else {
@@ -246,12 +248,16 @@ fn main() -> Result<()> {
             ffmpeg_cmdline_utils::FfmpegFrameReaderBuilder::new(std::path::PathBuf::from(path))
                 .spawn()?
                 .0;
-        print_stream(frames.map(|f| f.convert()), &args)
+        print_stream(frames, &args)
+    } else if let Ok(Ok(img)) = ImageReader::open(&path).map(|f| f.decode()) {
+        print_img(img.to_rgb8(), &args)
     } else {
-        let img = ImageReader::open(path)?
-            .decode()
-            .context("file_path should point to an image file with the correct extension")?;
-        print_img(img.to_rgba8(), &args)
+        let bytes =
+            reqwest::blocking::get(reqwest::Url::parse(&path).context(
+                "Given file path matches no criteria (Not GIF/Supported image/Video/URL)",
+            )?)?
+            .bytes()?;
+        Ok(())
     }
 }
 
@@ -275,13 +281,13 @@ impl Default for CameraIter {
 }
 
 impl Iterator for CameraIter {
-    type Item = image::ImageBuffer<image::Rgba<u8>, Vec<u8>>;
+    type Item = image::ImageBuffer<image::Rgb<u8>, Vec<u8>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.camera
             .frame()
             .expect("Failed to get next frame from the camera")
-            .decode_image::<nokhwa::pixel_format::RgbAFormat>()
+            .decode_image::<nokhwa::pixel_format::RgbFormat>()
             .ok()
     }
 }

@@ -12,6 +12,7 @@ clap = {version = "4.0.26", features = ["std", "derive","color","help","usage"],
 nokhwa = {git = "https://github.com/l1npengtul/nokhwa", features = ["input-native"]}
 ffmpeg_cmdline_utils="0.1.2"
 file-format = "0.8"
+reqwest= {version = "0.11.13", features = ["blocking"]}
 
 [profile.release]
 strip=true
