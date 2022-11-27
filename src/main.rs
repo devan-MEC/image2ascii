@@ -6,6 +6,8 @@ use crossterm::{
     terminal::{self, Clear, ClearType},
     ExecutableCommand,
 };
+use file_format::FileFormat;
+use image::buffer::ConvertBuffer;
 use image::{
     codecs::gif::GifDecoder, imageops::FilterType, io::Reader as ImageReader, AnimationDecoder,
     DynamicImage, Frame, GenericImageView, ImageFormat, Pixel,
@@ -151,7 +153,7 @@ fn print_img(img: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>, args: &Args) -> 
     for i in 0..height {
         for j in i * width..i * width + width {
             let p = pixels_with_value[j as usize];
-            let text = if args.true_color {
+            let text = if args.block_character {
                 "███"
             } else {
                 HEAT_MAP[p.3 as usize]
@@ -234,19 +236,23 @@ fn main() -> Result<()> {
     let path = args.file_path.clone();
     execute!(stdout(), Clear(ClearType::All)).unwrap();
     if args.webcam_feed {
-        print_camera(&args)?;
-    } else if image::ImageFormat::from_path(&path)
-        .context("file_path should be a valid path to a file")?
-        == ImageFormat::Gif
+        print_camera(&args)
+    } else if matches!(image::ImageFormat::from_path(&path), Ok(ImageFormat::Gif)) {
+        print_gif(&path, &args)
+    } else if [FileFormat::Mpeg4Part14Video, FileFormat::MatroskaVideo]
+        .contains(&FileFormat::from_file(&path).unwrap_or(FileFormat::ArbitraryBinaryData))
     {
-        print_gif(&path, &args)?;
+        let frames =
+            ffmpeg_cmdline_utils::FfmpegFrameReaderBuilder::new(std::path::PathBuf::from(path))
+                .spawn()?
+                .0;
+        print_stream(frames.map(|f| f.convert()), &args)
     } else {
         let img = ImageReader::open(path)?
             .decode()
             .context("file_path should point to an image file with the correct extension")?;
-        print_img(img.to_rgba8(), &args)?;
+        print_img(img.to_rgba8(), &args)
     }
-    Ok(())
 }
 
 struct CameraIter {

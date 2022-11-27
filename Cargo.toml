@@ -10,6 +10,8 @@ anyhow = "1.0.66"
 crossterm = { default-features = false, version = "0.25.0" }
 clap = {version = "4.0.26", features = ["std", "derive","color","help","usage"], default-features = false }
 nokhwa = {git = "https://github.com/l1npengtul/nokhwa", features = ["input-native"]}
+ffmpeg_cmdline_utils="0.1.2"
+file-format = "0.8"
 
 [profile.release]
 strip=true
