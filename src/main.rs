@@ -10,10 +10,11 @@ use file_format::FileFormat;
 use image::buffer::ConvertBuffer;
 use image::{
     codecs::gif::GifDecoder, imageops::FilterType, io::Reader as ImageReader, AnimationDecoder,
-    DynamicImage, Frame, GenericImageView, ImageFormat, Pixel,
+    DynamicImage, Frame, GenericImageView, Pixel,
 };
 use std::{
     io::{stdout, Write},
+    path::{Path, PathBuf},
     thread::sleep,
     time::Duration,
 };
@@ -81,6 +82,11 @@ struct Args {
 }
 
 const HEAT_MAP_LENGTH: usize = 16;
+const INVALID_URI_ERR: &str =
+    "No valid input media provided (Webcam/File on your local file system/Network URL)";
+const UNEXPECTED_FILE_TYPE_ERR: &str =
+    "Provided file type was not expected (Not MP4/MKV/JPG/PNG/GIF)";
+const TERMINAL_TOO_SMALL_ERR: &str = "I don't like zero sized terminals";
 const HEAT_MAP: [&str; HEAT_MAP_LENGTH] = [
     "   ",
     "...",
@@ -110,11 +116,11 @@ fn resize_img(img: DynamicImage) -> Result<DynamicImage> {
     let wr = img_dimensions
         .1
         .checked_div(canvas_dimensions.0)
-        .context("I don't like zero sized terminals")?;
+        .context(TERMINAL_TOO_SMALL_ERR)?;
     let hr = img_dimensions
         .1
         .checked_div(canvas_dimensions.1)
-        .context("I don't like zero sized terminals")?;
+        .context(TERMINAL_TOO_SMALL_ERR)?;
     Ok(if hr > wr {
         img.resize(
             canvas_dimensions.1 * img_dimensions.0 / img_dimensions.1,
@@ -206,7 +212,10 @@ where
     Ok(())
 }
 
-fn print_gif(path: &str, args: &Args) -> Result<()> {
+fn print_gif<P>(path: P, args: &Args) -> Result<()>
+where
+    P: AsRef<Path>,
+{
     let file = std::fs::File::open(path)?;
     let frames = GifDecoder::new(file)?
         .into_frames()
@@ -233,31 +242,43 @@ fn print_camera(args: &Args) -> Result<()> {
     }
 }
 
+fn handle_fs_path<P>(args: &Args, path: P) -> Result<()>
+where
+    P: Into<PathBuf>,
+{
+    let path: PathBuf = path.into();
+    match FileFormat::from_file(&path)? {
+        FileFormat::Mpeg4Part14Video | FileFormat::MatroskaVideo => print_stream(
+            ffmpeg_cmdline_utils::FfmpegFrameReaderBuilder::new(std::path::PathBuf::from(path))
+                .spawn()?
+                .0,
+            args,
+        ),
+        FileFormat::PortableNetworkGraphics | FileFormat::JointPhotographicExpertsGroup => {
+            print_img(ImageReader::open(&path)?.decode()?.to_rgb8(), args)
+        }
+        FileFormat::GraphicsInterchangeFormat => print_gif(path, args),
+        _ => Err(anyhow::anyhow!(UNEXPECTED_FILE_TYPE_ERR)),
+    }
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     let path = args.file_path.clone();
     execute!(stdout(), Clear(ClearType::All)).unwrap();
     if args.webcam_feed {
         print_camera(&args)
-    } else if matches!(image::ImageFormat::from_path(&path), Ok(ImageFormat::Gif)) {
-        print_gif(&path, &args)
-    } else if [FileFormat::Mpeg4Part14Video, FileFormat::MatroskaVideo]
-        .contains(&FileFormat::from_file(&path).unwrap_or(FileFormat::ArbitraryBinaryData))
-    {
-        let frames =
-            ffmpeg_cmdline_utils::FfmpegFrameReaderBuilder::new(std::path::PathBuf::from(path))
-                .spawn()?
-                .0;
-        print_stream(frames, &args)
-    } else if let Ok(Ok(img)) = ImageReader::open(&path).map(|f| f.decode()) {
-        print_img(img.to_rgb8(), &args)
+    } else if std::path::Path::new(&path).is_file() {
+        handle_fs_path(&args, &path)
+    } else if let Ok(url) = reqwest::Url::parse(&path) {
+        let bytes = &reqwest::blocking::get(url)?.bytes()?[..];
+        let mut file = tempfile::Builder::new()
+            .suffix((String::from(".") + FileFormat::from_bytes(bytes).extension()).as_str())
+            .tempfile()?;
+        file.as_file_mut().write(bytes)?;
+        handle_fs_path(&args, file.path())
     } else {
-        let bytes =
-            reqwest::blocking::get(reqwest::Url::parse(&path).context(
-                "Given file path matches no criteria (Not GIF/Supported image/Video/URL)",
-            )?)?
-            .bytes()?;
-        Ok(())
+        Err(anyhow::anyhow!(INVALID_URI_ERR))
     }
 }
 

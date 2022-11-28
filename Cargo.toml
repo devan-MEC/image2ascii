@@ -1,22 +1,49 @@
 [package]
 name = "image2ascii"
-version = "0.1.0"
 edition = "2021"
+version = "0.1.0"
 authors = ["devanarayanj.mec@gmail.com"]
 
 [dependencies]
-image = { features = ["jpeg_rayon", "gif", "png"], default-features = false, version = "0.24.5" }
 anyhow = "1.0.66"
-crossterm = { default-features = false, version = "0.25.0" }
-clap = {version = "4.0.26", features = ["std", "derive","color","help","usage"], default-features = false }
-nokhwa = {git = "https://github.com/l1npengtul/nokhwa", features = ["input-native"]}
-ffmpeg_cmdline_utils="0.1.2"
+ffmpeg_cmdline_utils = "0.1.2"
 file-format = "0.8"
-reqwest= {version = "0.11.13", features = ["blocking"]}
+tempfile = "3.3.0"
+
+[dependencies.clap]
+version = "4.0.26"
+features = ["std", "derive", "color", "help", "usage"]
+optional = false
+default-features = false
+
+[dependencies.crossterm]
+version = "0.25.0"
+features = []
+optional = false
+default-features = false
+
+[dependencies.image]
+version = "0.24.5"
+features = ["jpeg_rayon", "gif", "png"]
+optional = false
+default-features = false
+
+[dependencies.nokhwa]
+git = "https://github.com/l1npengtul/nokhwa"
+features = ["decoding", "input-native"]
+optional = false
+default-features = false
+
+[dependencies.reqwest]
+version = "0.11.13"
+features = ["blocking","rustls-tls"]
+optional = false
+default-features = false
 
 [profile.release]
-strip=true
-lto=true
-codegen-units=1
-panic="abort"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
 
+[profile.release.package]
